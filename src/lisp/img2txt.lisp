@@ -1,8 +1,10 @@
 ;; #!/usr/bin/sbcl --script
 ;; Uncomment to run source as script
 
+
 ;; Ensure Quicklisp is available
-(let ((quicklisp-init "~/quicklisp/setup.lisp"))
+(let ((quicklisp-init (merge-pathnames #p"quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
   (when (probe-file quicklisp-init)
     (load quicklisp-init)))
 
@@ -15,7 +17,7 @@
 
 (defpackage :img2txt
   (:use :cl :png)
-  (:export :image-to-ascii :img-to-txt))
+  (:export :image-to-ascii :img-to-txt :main))
 
 (in-package :img2txt)
 
@@ -81,6 +83,9 @@ in [0.0, 1.0] going from lightest to darkest.")
         from the lowest value to largest.
 "
 
+  (unless chars
+    (setq chars *ascii-chars*))
+
   (let* ((image        (png:decode-file file))
          (gsimage      (png:grayscale-image image))
          (bit-depth    (png:image-bit-depth gsimage))
@@ -112,7 +117,7 @@ in [0.0, 1.0] going from lightest to darkest.")
 
 
 
-(defun img-to-txt (file &key (width 80) (average t))
+(defun img-to-txt (file &key (width 80) (average t) (chars nil))
   "Given a at image at filepath FILE, return a string where each line
 is WIDTH chars wide."
   (format nil "~a"
@@ -121,19 +126,42 @@ is WIDTH chars wide."
                            (format nil "~a~%" row))
                          (image-to-ascii file
                                          :width width
+                                         :chars chars
                                          :average average)))))
 
 
 
 
+(defun parse-arg (key args &key (isbool nil))
+  (let ((res (member key args :test #'equal)))
+    (if res (if isbool t (nth 1 res))
+        nil)))
+
+(defun show-help (bin-name)
+  (format t "~a~a"
+           (format nil "Usage: ~a [ <filename> ] [ OPTION ... ]~%"  bin-name)
+           (format nil
+                   (concatenate
+                    'string
+                    "Options:~%"
+                    " -a, --alphabet  String of characters used for luminance~%"
+                    "                 from light -> dark.~%"
+                    " -s, --sample    Sample method, one of: average~%"
+                    " -f, --file      Path to image file, must exist if <filename>~%"
+                    "                 isn't the 1st arg.~%"
+                    " -c, --columns   The width of the text image (default 80)~%"
+                    " -h, --help, --usage Show this message~%"))))
 
 (defun main ()
   "Main function to process command-line arguments and generate ASCII art."
   (let* ((argv (uiop:raw-command-line-arguments))
          (argc (length argv))
-         (arg-avg (or (parse-arg "--average" argv :isbool t)
-                      (parse-arg "--avg" argv :isbool t)
-                      (parse-arg "-a" argv :isbool t)))
+
+         (arg-alpha (or (parse-arg "--alphabet" argv :isbool nil)
+                      (parse-arg "-a" argv :isbool nil)))
+
+         (arg-avg (or (parse-arg "--sample" argv :isbool nil)
+                      (parse-arg "-s" argv :isbool nil)))
 
          (arg-file (or (parse-arg "--file" argv :isbool nil)
                        (parse-arg "-f" argv :isbool nil)))
@@ -141,29 +169,35 @@ is WIDTH chars wide."
          (arg-cols (or (parse-arg "--columns" argv :isbool nil)
                        (parse-arg "-c" argv :isbool nil))))
 
+
+
     (when (< argc 2)
-      (format t "Usage: ./img2txt <image path> [ <column width> ]~%")
+      (format t "Not enough arguments, need a filename.")
+      (show-help (car argv))
       (uiop:quit 1))
+
+    (when (or (parse-arg "--help" argv :isbool t)
+              (parse-arg "-h" argv :isbool t)
+              (parse-arg "--usage" argv :isbool t))
+      (show-help (car argv))
+      (uiop:quit 0))
 
     (let ((image-path (or arg-file
                           (and (not (equal (aref (second argv) 0) #\-))
-                               (second argv))))
+                               (second argv))
+                          (progn  (format t "No filename given, exiting...")
+                                  (show-help (car argv))
+                                  (uiop:quit 1))))
           (width (if (> argc 2)
                      (or (and arg-cols (parse-integer arg-cols :junk-allowed t))
                          80))))
-
-
-
-      (format t "~a" (img-to-txt image-path
-                                 :width width
-                                 :average arg-avg))
+      (format t "~a"
+              (img-to-txt image-path
+                          :width width
+                          :chars arg-alpha
+                          :average (or (equal arg-avg nil)
+                                       (equal "average" arg-avg))))
       (uiop:quit 0))))
-
-
-(defun parse-arg (key args &key (isbool nil))
-  (let ((res (member key args :test #'equal)))
-    (if res (if isbool t (nth 1 res))
-        nil)))
 
 
 (defun build-exec (&key (filepath "./img2txt"))
