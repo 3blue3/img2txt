@@ -1,6 +1,5 @@
-;; #!/usr/bin/sbcl --script
 ;; Uncomment to run source as script
-
+;; #!/usr/bin/sbcl --script
 
 ;; Ensure Quicklisp is available
 (let ((quicklisp-init (merge-pathnames #p"quicklisp/setup.lisp"
@@ -17,9 +16,11 @@
 
 (defpackage :img2txt
   (:use :cl :png)
-  (:export :image-to-ascii :img-to-txt :main))
+  (:export :image-to-ascii :img-to-txt :main :build-exec))
 
 (in-package :img2txt)
+
+(defparameter *compiling?* uiop:*compile-check*)
 
 (defparameter *ascii-chars* " .,-~¬;:÷=»+*{}[]?£#€§%@¶"
   "List of ascii chars corresponding to a value of image luminance
@@ -264,8 +265,5 @@ present."
   "Build an executable for the script."
   (sb-ext:save-lisp-and-die filepath :toplevel 'main :executable t))
 
-;; Run main function if executed as a script
-
-;; Uncomment to build:
-(build-exec)
-;; Uncomment to run source (main)
+;; Uncomment to run source as script
+;; (main)
