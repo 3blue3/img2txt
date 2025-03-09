@@ -19,8 +19,7 @@
   (:export :image-to-ascii :img-to-txt :main :build-exec))
 
 (in-package :img2txt)
-
-(defparameter *compiling?* uiop:*compile-check*)
+(defparameter *default-sample-method* 'normal)
 
 (defparameter *ascii-chars* " .,-~¬;:÷=»+*{}[]?£#€§%@¶"
   "List of ascii chars corresponding to a value of image luminance
@@ -74,7 +73,7 @@ and on (`X', `Y')."
     (/ sum len)))
 
 
-(defun image-to-ascii (file &key (average t) (width 10) (scale-y 0.53) (chars *ascii-chars*))
+(defun image-to-ascii (file &key (sample *default-sample-method*) (width 10) (scale-y 0.53) (chars *ascii-chars*))
   "Convert an image at path `FILE' to ASCII representation.
 
  :`WIDTH' is the character width out the output text.
@@ -105,6 +104,8 @@ and on (`X', `Y')."
 
       (let* ((row (make-string width)))
         (dotimes (x width)
+          ;; Compute position for the sampling of characters
+          ;; spaced out width the distance of `SCALE'.
           (let* ((src-x (floor (* x scale)))
                  (src-y (floor (* y scale))))
 
@@ -112,12 +113,13 @@ and on (`X', `Y')."
             (assert (and (< src-x image-width)
                          (< src-y image-height)))
 
-            (let* ((p-val (cond (average (pixel-average gsimage
-                                  src-x src-y
-                                  image-width image-height))
+            (let* ((p-val (case sample
+                            (average (pixel-average gsimage
+                                                    src-x src-y
+                                                    image-width image-height))
 
-                                (t
-                                 (gsref gsimage src-x src-y))))
+                            (normal (gsref gsimage src-x src-y))
+                            (_      (gsref gsimage src-x src-y))))
 
                    (luminance (pixel-to-float p-val bit-depth))
                    (char      (map-to-ascii luminance :chars chars)))
@@ -128,7 +130,7 @@ and on (`X', `Y')."
 
 
 
-(defun img-to-txt (file &key (width 80) (average t) (chars nil))
+(defun img-to-txt (file &key (width 80) (sample *default-sample-method*) (chars nil))
   "Given a at image at filepath `FILE', return a string where each line
 is `WIDTH' chars wide.
 
@@ -148,7 +150,7 @@ is `WIDTH' chars wide.
                   (image-to-ascii file
                                   :width width
                                   :chars chars
-                                  :average average)))))
+                                  :sample sample)))))
 
 
 
@@ -243,7 +245,8 @@ present."
                  (img-to-txt image-path
                              :width width
                              :chars arg-alpha
-                             :average (equal "average" arg-avg))
+                             :sample (or (and (equal "average" arg-avg) 'average)
+                                         *default-sample-method*))
 
                  (progn (format t "File does not exist, exiting...")
                         (uiop:quit 1)))))

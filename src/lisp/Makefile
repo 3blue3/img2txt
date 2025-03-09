@@ -20,7 +20,7 @@ $(OUT): $(SRC)
 # Run with arguments
 run: $(OUT)
 	@echo "Running $(OUT) with args: $(ARGS)"
-	@echo $(ARGS) | xargs ./$(OUT)
+	@time echo $(ARGS) | xargs ./$(OUT)
 
 # Run as a script
 script:
