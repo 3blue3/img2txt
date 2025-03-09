@@ -182,7 +182,10 @@ present."
                     "Options:~%"
                     " -a, --alphabet  String of characters used for luminance~%"
                     "                 from light -> dark.~%"
-                    " -s, --sample    Sample method, one of: average~%"
+                    (format
+                     nil
+                     " -s, --sample    Sample method, one of: average, normal (default ~a)~%"
+                     *default-sample-method*)
                     " -f, --file      Path to image file, must exist if <filename>~%"
                     "                 isn't the 1st arg.~%"
                     " -c, --columns   The width of the text image (default 80)~%"
@@ -246,6 +249,7 @@ present."
                              :width width
                              :chars arg-alpha
                              :sample (or (and (equal "average" arg-avg) 'average)
+                                         (and (equal "normal" arg-avg) 'normal)
                                          *default-sample-method*))
 
                  (progn (format t "File does not exist, exiting...")
