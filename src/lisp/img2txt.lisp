@@ -389,7 +389,7 @@ present."
                     "                 from light -> dark.~%"
 
                     (format nil "~a~a (default ~a)~%" " -s, --sample    "
-                            "Sample method, one of: average, normal, line"
+                            "Sample method, one of: average, normal, lines"
                             *default-sample-method*)
 
                     " -f, --file      Path to image file, must exist if <filename>~%"
@@ -400,6 +400,15 @@ present."
                             " -y, --scale-y   "
                             "Scalingfactor applied to the y-axis, 0-100"
                             *default-scale*)
+                    (format nil "~a~a (default ~a)~%"
+                            " -i, --intensify "
+                            "Intensify detected lines in sampling mode 'lines' by this factor 0-100"
+                            *default-intensify*)
+
+                    (format nil "~a~a (default ~a)~%"
+                            " -S, --simularity "
+                            "The difference in luminance allowed between characters 0-255"
+                            *default-simularity*)
                     "~%"
                     " -h, --help, --usage~%"
                     "                 Show this message~%"))))
