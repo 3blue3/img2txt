@@ -21,7 +21,7 @@
           (load quicklisp-init)))))
 
 (ql:quickload "png" :silent t)
-;(ql:quickload "cl-colors" :silent t)
+                                        ;(ql:quickload "cl-colors" :silent t)
 ;;
 ;; (require :uiop)
 ;; (require :cl-colors)
@@ -32,9 +32,17 @@
   (:export :image-to-ascii :img-to-txt :main :build-exec))
 
 (in-package :img2txt)
+(defparameter *default-intensify* 0.8
+  "In `pixel-line' when a line has been detected, multiply the lines average by this factor.")
+
+(defparameter *default-simularity* 3
+  "In `pixel-line', this variable defines the difference in grayscale pixel
+ value which all pixels of a line must share.")
+
 (defparameter *default-sample-method* 'normal)
 
-(defparameter *default-scale* 53 "Default Y-scale")
+(defparameter *default-scale* (/ 100 57)
+  "Default scale factor applied to the y-axis.")
 
 (defparameter *ascii-chars* " .,-~¬;:÷=»+*}]?£#€§%@"
   "List of ascii chars corresponding to a value of image luminance
@@ -91,15 +99,15 @@ and on (`X', `Y')."
 
 (defparameter *relative-lines*
   '(((-1 . 1)  (0 . 1)  (1 . 1)) ;; Top
-   ((-1 . 0)  (0 . 0)  (1 . 0)) ;; Middle
-   ((-1 . -1) (0 . -1) (1 . -1));; Bottom
-   ;; Diagonal lines
-   ((1 . -1)  (0 . 0) (-1 . 1)) ;; [\]
-   ((-1 . 1)  (0 . 0) (1 . -1)) ;; [/]
-   ;; Vertical lines
-   ((1 . -1)  (1 . 0)  (1 . 1))    ;; Left
-   ((0 . -1)  (0 . 0)  (0 . 1))    ;; Middle
-   ((-1 . -1) (-1 . 0) (-1 . 1)))) ;; Right
+    ((-1 . 0)  (0 . 0)  (1 . 0)) ;; Middle
+    ((-1 . -1) (0 . -1) (1 . -1));; Bottom
+    ;; Diagonal lines
+    ((1 . -1)  (0 . 0) (-1 . 1)) ;; [\]
+    ((-1 . 1)  (0 . 0) (1 . -1)) ;; [/]
+    ;; Vertical lines
+    ((1 . -1)  (1 . 0)  (1 . 1))    ;; Left
+    ((0 . -1)  (0 . 0)  (0 . 1))    ;; Middle
+    ((-1 . -1) (-1 . 0) (-1 . 1)))) ;; Right
 
 (defparameter *3x3-points*
   '((1 . 1)  (1 . -1) (-1 . 1)
@@ -109,48 +117,21 @@ and on (`X', `Y')."
 (defun pixel-average (image x y width height)
   "Compute the average in `IMAGE' of size `WIDTH' x `HEIGHT' of the pixels around
 and on (`X', `Y')."
+    (let* ((sum (gsref image x y))
+           (len 1))
 
-  (let* ((sum 0)
-         (len 0)
-         ;; Pixel positions relative to (x, y)
-         (perms '((1 . 1)  (1 . -1) (-1 . 1)
-                  (0 . 1)  (0 . -1)  (1 . 0)
-                  (-1 . 0) (0 . 0)))
-         (valid-pixels '())
-         (color-len 0)
-         (line-sum 0))
-
-    ;; Compute average pixel luminance
-    (dolist (p perms)
-      (let ((x_ (+ x (car p)))
-            (y_ (+ y (cdr p))))
-        ;; (x, y) must always be in bounds, otherwise
-        ;; assert is triggered previously.
-        (when (in-bounds  x_ y_ width height)
-          (push (cons p (gsref image x_ y_)) valid-pixels)
-          (incf sum   (gsref image x_ y_))
-          (incf len 1))))
+      ;; Compute average pixel luminance
+      (dolist (p *3x3-points*)
+        (let ((x_ (+ x (car p)))
+              (y_ (+ y (cdr p))))
+          ;; (x, y) must always be in bounds, otherwise
+          ;; assert is triggered previously.
+          (when (in-bounds  x_ y_ width height)
+            (incf sum   (gsref image x_ y_))
+            (incf len 1))))
 
 
-    (dolist (line *relative-lines*)
-      (let* ((cline
-               (catch 'back
-                 (loop :for pixel :in valid-pixels
-                       :if (not (member (car pixel)
-                                        line :test #'equal))
-                       :do (throw 'back nil)
-                     :else
-                       :collect (cdr pixel)))))
-
-        (when (= 3 (length cline))
-          (incf line-sum
-                (/ (+ (car cline)
-                      (cadr cline)
-                      (caddr cline))
-                   3))
-          (incf color-len 1))))
-
-    (/ line-sum color-len)))
+      (/ sum len)))
 
 
 ;; Checks if two points form a diagonal line
@@ -194,8 +175,9 @@ and on (`X', `Y')."
   (abs (- c1 c2)))
 
 ;; Checks if the three points in a line have similar colors
-(defun similar-color (line &key (similarity 20))
+(defun similar-color (line &key (similarity *default-simularity*))
   "Return T if all pixels in LINE have similar color."
+
   (let ((a (nth 0 line))
         (b (nth 1 line))
         (c (nth 2 line)))
@@ -205,13 +187,19 @@ and on (`X', `Y')."
          (< 0 (color-distance (nth 1 b) (nth 1 c)) similarity))))
 
 ;; Wrapper for `similar-color`
-(defun similar-colorp (line &key (similarity 20))
+(defun similar-colorp (line &key (similarity *default-simularity*))
   "Checks if three pixel values A, B, and C are similar."
   (similar-color line :similarity similarity))
 
-(defun pixel-line (image x y width height &key  (intensify 0.8) (simularity 3))
+(defun pixel-line
+    (image x y width height
+     &key
+       (intensify *default-intensify*)
+       (simularity *default-simularity*))
+
   "Check if three pixels around (`X', `Y`) form a straight line.
    Returns the average intensity if they form a line, otherwise the original pixel."
+
   (let* ((valid-points '())
          (valid-lines '())
          (valid-pixels '()))
@@ -245,8 +233,9 @@ and on (`X', `Y')."
 
         ;; If a valid line is found and colors match, return the average intensity
         (when (and is-valid?
-                   ;;                         (apply #'check-line (mapcar #'car line-w-color))
+                   ;; Check if
                    (similar-colorp line-w-color :similarity simularity))
+
           (push line-w-color valid-lines))))
 
     (if (= 1 (length valid-lines))
@@ -254,68 +243,88 @@ and on (`X', `Y')."
         ;; a plain dark square could otherwise be counted
         ;; as a line
         (let ((sum (reduce #'+ (mapcar #'(lambda (p) (nth 1 p)) (car valid-lines)))))
-          (max 255 (* intensify (floor (/ sum 3)))))
+;;          (format t "~a ~a ~a ~%" sum intensify           (* intensify (/ sum 3)))
+          (min 255 (floor (* intensify (/ sum 3)))))
 
         ;; If no valid line is found
         ;; return the original pixel value
         (gsref image x y))))
 
-(defun image-to-ascii (file &key (sample *default-sample-method*) (width 10) (scale-y 0.53) (chars *ascii-chars*))
-  "Convert an image at path `FILE' to ASCII representation.
+(defun image-to-ascii
+    (file &key
+            (width *default-column-width*)
+            (sample *default-sample-method*)
+            (scale-y *default-scale*)
+            (intensify *default-intensify*)
+            (simularity *default-simularity*)
+            (chars *ascii-chars*))
 
- :`WIDTH' is the character width out the output text.
+  "Convert an image at path FILE to ASCII representation.
 
- :`SCALE-Y' is a scaling factor applied to the y axis of the image. Used to
-            compensate for character height, preserving the image proportions.
+ :WIDTH    - The character width of the output text.
+ :SCALE-Y  - Vertical scaling factor to preserve aspect ratio.
+ :CHARS    - List of ASCII characters sorted by luminance.
+ :SAMPLE   - Sampling method: 'normal, 'average, or 'lines."
 
- :`CHARS' is a list of characters which correspond to a value of luminance
-          in [0.0,1.0]. Chars are sorted such that the left most char
-          represent the lowest value of the luminance, increasing towards
-          the right.
-
- :`AVERAGE' if non-nil, compute the luminance of pixel through averaging."
-
-  (unless chars
-    (setq chars *ascii-chars*))
+  (unless chars (setq chars *ascii-chars*))
 
   (let* ((image        (png:decode-file file))
          (gsimage      (png:grayscale-image image))
-         (bit-depth    (png:image-bit-depth gsimage))
          (image-width  (png:image-width gsimage))
          (image-height (png:image-height gsimage))
-         (scale         (/ image-width width))
-         (height (floor (/ (* scale-y image-height) scale)))
-         (output '()))
+         (bit-depth    (png:image-bit-depth gsimage))
+         (scale        (/ image-width width))
+         (height       (floor (/ image-height scale) scale-y)))
 
-    (dotimes (y height)
-      (let* ((row (make-string width))
-             (src-y (floor (* y scale))))
+    (let ((output-string (make-array 0
+                                     :element-type 'character
+                                     :adjustable t
+                                     :fill-pointer 0)))
+      (declare (type string output-string))
 
-        (when  (< src-y image-height)
-          (dotimes (x width)
-            ;; Compute position for the sampling of characters
-            ;; spaced out width the distance of `SCALE'.
-            (let ((src-x (floor (* x scale))))
-              (when (< src-x image-width)
-                ;; This should never happen
+      (dotimes (y height)
 
-                (let* ((p-val (case sample
-                                (average (pixel-average gsimage src-x src-y
-                                                        image-width image-height))
+        (let* ((row (make-string width))
+               (src-y (min (floor (* y scale scale-y))
+                           (1- image-height))))
 
-                                (normal (gsref gsimage src-x src-y))
+          (if  (< src-y image-height)
+               (progn (dotimes (x width)
+                        ;; Compute position for the sampling of characters
+                        ;; spaced out width the distance of `SCALE'.
+                        (let ((src-x (min (floor (* x scale))
+                                          (1- image-width))))
+                          (when (< src-x image-width)
+                            ;; This should never happen
+                            (when (not (in-bounds src-x src-y image-width image-height))
+                              (format *error-output* "Out of bounds!~%"))
 
-                                (lines (pixel-line gsimage src-x src-y
-                                                   image-width image-height))
+                            (let* ((pixel
+                                     (case sample
+                                       (average (pixel-average gsimage src-x src-y
+                                                               image-width image-height))
 
-                                (_      (gsref gsimage src-x src-y))))
+                                       (normal (gsref gsimage src-x src-y))
 
-                       (luminance (pixel-to-float p-val bit-depth))
-                       (char      (map-to-ascii luminance :chars chars)))
+                                       (lines (pixel-line gsimage src-x src-y
+                                                          image-width image-height
+                                                          :intensify intensify
+                                                          :simularity simularity
+                                                          ))
 
-                  (setf (aref row x) char)))))
-          (push row output))))
-    (nreverse output)))
+                                       (_      (gsref gsimage src-x src-y))))
+
+                                   (luminance (pixel-to-float pixel bit-depth))
+                                   (char      (map-to-ascii luminance :chars chars)))
+
+                              (setf (aref row x) char)))))
+
+                      (format output-string "~a~%" row))
+
+               (format *error-output* "Out of bounds~%"))))
+
+
+      (the string output-string))))
 
 
 
@@ -323,6 +332,8 @@ and on (`X', `Y')."
     (file &key
             (width *default-column-width*)
             (sample *default-sample-method*)
+            (intensify *default-intensify*)
+            (simularity *default-simularity*)
             (scale-y *default-scale*)
             (chars *ascii-chars*))
   "Given a at image at filepath `FILE', return a string where each line
@@ -337,14 +348,14 @@ is `WIDTH' chars wide.
  :`AVERAGE' if non-nil, compute the luminance of pixel through averaging."
 
 
-  (apply #'concatenate 'string
-         (mapcar (lambda (row)
-                   (format nil "~a~%" row))
-                 (image-to-ascii file
-                                 :scale-y scale-y
-                                 :width width
-                                 :chars chars
-                                 :sample sample))))
+
+  (image-to-ascii file
+                  :intensify intensify
+                  :simularity simularity
+                  :scale-y scale-y
+                  :width width
+                  :chars chars
+                  :sample sample))
 
 
 
@@ -376,14 +387,22 @@ present."
                     "Options:~%"
                     " -a, --alphabet  String of characters used for luminance~%"
                     "                 from light -> dark.~%"
-                    (format
-                     nil
-                     " -s, --sample    Sample method, one of: average, normal (default ~a)~%"
-                     *default-sample-method*)
+
+                    (format nil "~a~a (default ~a)~%" " -s, --sample    "
+                            "Sample method, one of: average, normal, line"
+                            *default-sample-method*)
+
                     " -f, --file      Path to image file, must exist if <filename>~%"
                     "                 isn't the 1st arg.~%"
                     " -c, --columns   The width of the text image (default 80)~%"
-                    " -h, --help, --usage Show this message~%"))))
+
+                    (format nil "~a~a (default ~a)~%"
+                            " -y, --scale-y   "
+                            "Scalingfactor applied to the y-axis, 0-100"
+                            *default-scale*)
+                    "~%"
+                    " -h, --help, --usage~%"
+                    "                 Show this message~%"))))
 
 
 (defun main ()
@@ -396,8 +415,13 @@ present."
                         (parse-arg "-a" argv :isbool nil)))
 
 
-         (arg-intfy (or (parse-arg "--intensify" argv :isbool nil)
-                        (parse-arg "-i" argv :isbool nil)))
+         (arg-intensify
+           (or (parse-arg "--intensify" argv :isbool nil)
+               (parse-arg "-i" argv :isbool nil)))
+
+         (arg-simularity
+           (or (parse-arg "--simularity" argv :isbool nil)
+               (parse-arg "-S" argv :isbool nil)))
 
          (arg-avg (or (parse-arg "--sample" argv :isbool nil)
                       (parse-arg "-s" argv :isbool nil)))
@@ -405,15 +429,15 @@ present."
          (arg-file (or (parse-arg "--file" argv :isbool nil)
                        (parse-arg "-f" argv :isbool nil)))
 
-         (arg-scale (or (parse-arg "--scale" argv :isbool nil)
-                       (parse-arg "-S" argv :isbool nil)))
+         (arg-scale (or (parse-arg "--scale-y" argv :isbool nil)
+                        (parse-arg "-y" argv :isbool nil)))
 
          (arg-cols (or (parse-arg "--columns" argv :isbool nil)
                        (parse-arg "-c" argv :isbool nil))))
 
     ;; A path cannot have been provided. Show help message
     (when (< argc 2)
-      (format t "Not enough arguments, need a filename.~%")
+      (format *error-output* "Not enough arguments, need a filename.~%")
       (show-help (car argv))
       (uiop:quit 1))
 
@@ -433,7 +457,7 @@ present."
                  (and (not (equal (aref (second argv) 0) #\-))
                       (second argv))
                  ;; If not show help message.
-                 (progn  (format t "No filename given, exiting...~%")
+                 (progn  (format *error-output* "No filename given, exiting...~%")
                          (show-help (car argv))
                          (uiop:quit 1))))
            ;; Get the column width
@@ -441,10 +465,11 @@ present."
                       (or (and arg-cols
                                (parse-integer arg-cols :junk-allowed t))
                           *default-column-width*)))
-           (scale-y (/  (or (and arg-scale
-                                 (parse-integer arg-scale))
-                            *default-scale*)
-                        100))
+           ;; Scaling factor for y-axis
+           (scale-y (or (and arg-scale
+                             (/ 100 (parse-integer arg-scale)))
+                        *default-scale*))
+
            ;; Save image to a file?
            (save-image-path (or (parse-arg "-o" argv :isbool nil)
                                 (parse-arg "--output" argv :isbool nil)))
@@ -454,11 +479,15 @@ present."
              (if (probe-file image-path)
                  (progn
 
-                   (when (or (<= scale-y 0) (> scale-y 100))
-                     (format t "Scale must be between 0 and 100~%")
-                     (uiop:quit 1))
 
                    (img-to-txt image-path
+                               :intensify (or (and arg-intensify
+                                                   (/ (parse-integer arg-intensify) 100))
+                                              *default-intensify*)
+
+                               :simularity  (or (and arg-simularity
+                                                     (parse-integer arg-simularity))
+                                                *default-simularity*)
                              :width width
                              :scale-y scale-y
                              :chars arg-alpha
@@ -468,7 +497,7 @@ present."
                                          *default-sample-method*))
                  )
 
-                 (progn (format t "File does not exist, exiting...~%")
+                 (progn (format *error-output* "File does not exist, exiting...~%")
                         (uiop:quit 1)))))
 
       ;; Print the text image
