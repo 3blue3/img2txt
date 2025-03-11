@@ -31,8 +31,11 @@
 (ql:quickload "png" :silent t)
                                         ;(ql:quickload "cl-colors" :silent t)
 
+
+
+
 ;;;; ###########################################################################
-;;;; #                       VARIABLES AND PARAMETERS                          #
+;;;; #                                  IMG2TXT                                #
 ;;;; ###########################################################################
 
 (defpackage :img2txt
@@ -40,6 +43,7 @@
   (:export :image-to-ascii :img-to-txt :main :build-exec))
 
 (in-package :img2txt)
+
 (defparameter *default-intensify* 0.8
   "In `pixel-line' when a line has been detected, multiply the lines average by this factor.")
 
@@ -81,30 +85,8 @@ in [0.0, 1.0] going from lightest to darkest.")
         (< ,y ,height) (>= ,y 0)))
 
 
-;;;;; ########## SAMPLING METHOD: AVERAGE ##########
-
-(defun pixel-average (image x y width height)
-  "Compute the average in `IMAGE' of size `WIDTH' x `HEIGHT' of the pixels around
-and on (`X', `Y')."
-
-  (let* ((sum 0)
-         (len 0)
-         ;; Pixel positions relative to (x, y)
-         (perms '((1 . 1)  (1 . -1) (-1 . 1)
-                  (0 . 1)  (0 . -1)  (1 . 0)
-                  (-1 . 0) (0 . 0))))
-
-    ;; Compute average pixel luminance
-    (dolist (p perms)
-      (let ((x_ (+ x (car p)))
-            (y_ (+ y (cdr p))))
-        ;; (x, y) must always be in bounds, otherwise
-        ;; assert is triggered previously.
-        (when (in-bounds  x_ y_ width height)
-          (incf sum (gsref image x_ y_))
-          (incf len 1))))
-
-    (/ sum len)))
+
+;;;;; ########## SAMPLING METHOD: LINES ##########
 
 
 
@@ -124,26 +106,6 @@ and on (`X', `Y')."
   '((1 . 1)  (1 . -1) (-1 . 1)
     (0 . 1)  (0 . -1)  (1 . 0)
     (-1 . 0) (0 . 0)))
-
-(defun pixel-average (image x y width height)
-  "Compute the average in `IMAGE' of size `WIDTH' x `HEIGHT' of the pixels around
-and on (`X', `Y')."
-    (let* ((sum 0)
-           (len 0))
-
-      ;; Compute average pixel luminance
-      (dolist (p *3x3-points*)
-        (let ((x_ (+ x (car p)))
-              (y_ (+ y (cdr p))))
-          ;; (x, y) must always be in bounds, otherwise
-          ;; assert is triggered previously.
-          (when (in-bounds  x_ y_ width height)
-            (incf sum   (gsref image x_ y_))
-            (incf len 1))))
-
-
-      (/ sum len)))
-
 
 ;; Checks if two points form a diagonal line
 (defmacro check-diagonal (a b)
@@ -261,6 +223,35 @@ and on (`X', `Y')."
         ;; return the original pixel value
         (gsref image x y))))
 
+
+
+
+;;;;; ########## SAMPLING METHOD: AVERAGE ##########
+
+
+(defun pixel-average (image x y width height)
+  "Compute the average of the pixels around point (`X', `Y'), in `IMAGE'
+of size `WIDTH' x `HEIGHT'"
+
+    (let* ((sum 0) (len 0))
+
+      ;; Compute average pixel luminance.
+      (dolist (p *3x3-points*)
+        (let ((x_ (+ x (car p)))
+              (y_ (+ y (cdr p))))
+
+          ;; Add all points that are in bounds.
+          (when (in-bounds  x_ y_ width height)
+            (incf sum   (gsref image x_ y_))
+            (incf len 1))))
+
+      ;; Compute average.
+      (/ sum len)
+      ))
+
+
+
+
 (defun image-to-ascii
     (file &key
             (width *default-column-width*)
@@ -275,7 +266,10 @@ and on (`X', `Y')."
  :WIDTH    - The character width of the output text.
  :SCALE-Y  - Vertical scaling factor to preserve aspect ratio.
  :CHARS    - List of ASCII characters sorted by luminance.
- :SAMPLE   - Sampling method: 'normal, 'average, or 'lines."
+ :SAMPLE   - Sampling method: 'normal, 'average, or 'lines.
+ :INTENSIFY - Scale lines with this factor when :SAMPLE is lines.
+ :SIMULARITY - Used with :SAMPLE lines to determine the maximum.
+               allowed differences of pixels in a line."
 
   (unless chars (setq chars *ascii-chars*))
 
@@ -283,59 +277,68 @@ and on (`X', `Y')."
          (gsimage      (png:grayscale-image image))
          (image-width  (png:image-width gsimage))
          (image-height (png:image-height gsimage))
-         (bit-depth    (png:image-bit-depth gsimage))
-         (scale        (/ image-width width))
-         (height       (floor (/ image-height scale) scale-y)))
+         (bit-depth    (png:image-bit-depth gsimage)))
 
-    (let ((output-string (make-array 0
-                                     :element-type 'character
-                                     :adjustable t
-                                     :fill-pointer 0)))
+    (let* ((scale        (/ image-width width))
+           (height       (floor (/ image-height scale) scale-y)))
+
+    (let ((output-string
+            (make-array
+             0 :element-type 'character
+               :adjustable t
+               :fill-pointer 0)))
       (declare (type string output-string))
 
-      (dotimes (y height)
 
+      (dotimes (y height)
         (let* ((row (make-string width))
                (src-y (min (floor (* y scale scale-y))
                            (1- image-height))))
 
-          (if  (< src-y image-height)
-               (progn (dotimes (x width)
-                        ;; Compute position for the sampling of characters
-                        ;; spaced out width the distance of `SCALE'.
-                        (let ((src-x (min (floor (* x scale))
-                                          (1- image-width))))
-                          (when (< src-x image-width)
-                            ;; This should never happen
-                            (when (not (in-bounds src-x src-y image-width image-height))
-                              (format *error-output* "Out of bounds!~%"))
+          (when  (>= src-y image-height)
+            (format *error-output* "Y-Axis: ~a>=~aOut of bounds~%" src-y image-height))
 
-                            (let* ((pixel
-                                     (case sample
-                                       (average (pixel-average gsimage src-x src-y
-                                                               image-width image-height))
+          (dotimes (x width)
+            ;; Compute position for the sampling of characters
+            ;; spaced out width the distance of `SCALE'.
+            (let ((src-x (min (floor (* x scale)) (1- image-width))))
 
-                                       (normal (gsref gsimage src-x src-y))
+              (when (< src-x image-width)
 
-                                       (lines (pixel-line gsimage src-x src-y
-                                                          image-width image-height
-                                                          :intensify intensify
-                                                          :simularity simularity
-                                                          ))
+                ;; This should never happen
+                (when (not (in-bounds src-x src-y image-width image-height))
+                  (format *error-output* "X-Axis: Position (~a, ~a) is out of bounds~%" src-x src-y))
 
-                                       (_      (gsref gsimage src-x src-y))))
+                (let* ((pixel
+                         (case sample
+                           ;; Average sampling method
+                           (average (pixel-average gsimage src-x src-y
+                                                   image-width image-height))
 
-                                   (luminance (pixel-to-float pixel bit-depth))
-                                   (char      (map-to-ascii luminance :chars chars)))
+                           ;; Explicitly specify no sampling algorithm
+                           (normal (gsref gsimage src-x src-y))
 
-                              (setf (aref row x) char)))))
+                           ;; Line detection algorithm
+                           (lines (pixel-line gsimage src-x src-y
+                                              image-width image-height
+                                              :intensify intensify
+                                              :simularity simularity))
 
-                      (format output-string "~a~%" row))
+                           ;; Default sampling
+                           (_ (gsref gsimage src-x src-y))))
 
-               (format *error-output* "Out of bounds~%"))))
+                       ;; Convert luminance from 0-255 to 0.0-1.0
+                       (luminance (pixel-to-float pixel bit-depth))
+                       ;; Get character mapped to `luminance' value
+                       (char      (map-to-ascii luminance :chars chars)))
 
+                  ;; Set column char
+                  (setf (aref row x) char)))))
 
-      (the string output-string))))
+          ;; Append row
+          (format output-string "~a~%" row)))
+
+      (the string output-string)))))
 
 
 
@@ -347,28 +350,31 @@ and on (`X', `Y')."
             (simularity *default-simularity*)
             (scale-y *default-scale*)
             (chars *ascii-chars*))
-  "Given a at image at filepath `FILE', return a string where each line
-is `WIDTH' chars wide.
+  "Given a at image at filepath `FILE', compute a text image `WIDTH' chars wide.
 
-
- :`CHARS' is a list of characters which correspond to a value of luminance
+ :CHARS - is a list of characters which correspond to a value of luminance
           in [0.0,1.0]. Chars are sorted such that the left most char
           represent the lowest value of the luminance, increasing towards
           the right.
+ :SAMPLE   - Sampling method: 'normal, 'average, or 'lines.
 
- :`AVERAGE' if non-nil, compute the luminance of pixel through averaging."
+ :AVERAGE - if non-nil, compute the luminance of pixel through averaging.
+
+ :INTENSIFY - Scale lines with this factor when :SAMPLE is lines.
+ :SIMULARITY - Used with :SAMPLE lines to determine the maximum.
+               allowed differences of pixels in a line."
+
+  (image-to-ascii
+   file :intensify intensify
+        :simularity simularity
+        :scale-y scale-y
+        :width width
+        :chars chars
+        :sample sample))
 
 
-
-  (image-to-ascii file
-                  :intensify intensify
-                  :simularity simularity
-                  :scale-y scale-y
-                  :width width
-                  :chars chars
-                  :sample sample))
-
-
+
+;;;; ##### Argument handling, Startup and Compilation ####
 
 
 (defun parse-arg (key args &key (isbool nil))
