@@ -287,54 +287,52 @@ of size `WIDTH' x `HEIGHT'"
 (defun floyd-steinberg-dither-pixel
     (image x y width height
            &key
-           ;; For quantize
-           (cutoff 127)  ;; Under this value ==> val-min
-           (val-max 255) ;; Otherwise ==> val-min
-           (val-min 0))
-  "Apply Floyd-Steinberg dithering on IMAGE with given WIDTH and HEIGHT."
+           (scalar 1)
+           (cutoff 127)  ;; Threshold for binarization
+           (val-max 255) ;; Max quantized value
+           (val-min 0))  ;; Min quantized value
+  "Apply Floyd-Steinberg dithering on IMAGE at position (X, Y) with given WIDTH and HEIGHT.
+   The pixel is quantized based on CUTOFF, and the error is diffused to its
+   neighbors and IMAGE is a 2D array of values 0-255."
+
+  (when (not (in-bounds x y width height))
+    (return-from floyd-steinberg-dither-pixel
+                  (aref image y x)))  ;; Return existing pixel if out of bounds
 
 
-  (if (not (and (in-bounds x y width height)))
-      (progn
-;;        (format t " Out of bounds: (~a, ~a) ~%" x y)
-        (aref image y x 0))
+  (let* ((scalar (/ 1 scalar))
+         ;; Original pixel value
+         (old-pixel (aref image y x))
+         ;; Quantization
+         (new-pixel
+          (quantize old-pixel
+                    :cutoff cutoff
+                    :val-min val-min
+                    :val-max val-max))
+         ;; Quantization error
+         (err (- old-pixel new-pixel)))
 
-    (let* ((old-pixel (aref image  y x 0))
-           (new-pixel (quantize old-pixel
-                                :cutoff cutoff
-                                :val-max val-max
-                                :val-min val-min))
-           (err (floor (- old-pixel new-pixel))))
+    ;; Set the new quantized value
+    (setf (aref image y x) new-pixel)
 
-;;      (format t "In bounds: (~a, ~a) ~%" x y)
+    (flet ((apply-error (dx dy factor)
+                        (let ((nx (+ x dx))
+                              (ny (+ y dy)))
+                          ;; Distribute the error using
+                          ;; Floyd-Steinberg coefficients
+                          (when (in-bounds nx ny width height)
+                            (incf (aref image ny nx)
+                                  (* err factor))))))
 
-      (setf (aref image y x 0) new-pixel)
+          ;; Error diffusion
+          (apply-error  1  0  7/16)  ;; Right
+          (apply-error -1  1  3/16)  ;; Bottom-left
+          (apply-error  0  1  5/16)  ;; Below
+          (apply-error  1  1  1/16)) ;; Bottom-right
 
-      ;; -- Error diffusion --
-
-      ;; Right neighbor
-      (when (in-bounds (1+ x) y width height)
-        (incf (aref image (1+ x) y 0)
-              (floor (* err 7/16))))
-
-      ;; Bottom-right
-      (when (in-bounds (1+ x) (1+ y) width height)
-        (incf (aref image  (1+ y) (1+ x) 0)
-              (floor (* err 1/16))))
-
-      ;; Below
-      (when (in-bounds x (1+ y) width height)
-        (incf (aref image (1+ y) x 0)
-              (floor (* err 5/16))))
-
-      ;; Bottom-left
-      (when (in-bounds (1- x) (1+ y) width height)
-        (incf (aref image  (1+ y) (1- x) 0)
-              (floor (* err 3/16))))
-
-;;      (format t "end~%")
-      new-pixel)))
-
+    ;; Return new pixel
+    (* scalar
+       new-pixel)))
 
 ;;;; ###########################################################################
 ;;;; #                              IMAGE TO TEXT                              #
@@ -349,12 +347,12 @@ of size `WIDTH' x `HEIGHT'"
           (intensify default-intensify)
           (simularity default-simularity)
           (chars ascii-chars)
-           ;; For quantize
-           (cutoff 127)  ;; Under this value ==> val-min
-           (val-max 255) ;; Otherwise ==> val-min
-           (val-min 0)
+          ;; For quantize
+          (cutoff 127)  ;; Under this value ==> val-min
+          (val-max 255) ;; Otherwise ==> val-min
+          (val-min 0)
+          (scalar 1))
 
-          )
 
   "Convert an image at path FILE to ASCII representation.
 
@@ -407,6 +405,7 @@ of size `WIDTH' x `HEIGHT'"
                   (format *error-output* "X-Axis: Position (~a, ~a) is out of bounds~%"
                           src-x src-y))
 
+
                 (let* ((pixel
                         (handler-case
                             (case sample
@@ -420,6 +419,7 @@ of size `WIDTH' x `HEIGHT'"
                                   (dither (floyd-steinberg-dither-pixel
                                            gsimage     src-x src-y
                                            image-width image-height
+                                           :scalar scalar
                                            :cutoff cutoff
                                            :val-max val-max
                                            :val-min val-min))
@@ -468,7 +468,7 @@ of size `WIDTH' x `HEIGHT'"
            (cutoff 127)  ;; Under this value ==> val-min
            (val-max 255) ;; Otherwise ==> val-min
            (val-min 0)
-
+           (scalar 1)
             )
   "Given a at image at filepath `FILE', compute a text image `WIDTH' chars wide.
 
@@ -489,13 +489,12 @@ of size `WIDTH' x `HEIGHT'"
         :simularity simularity
         :scale-y scale-y
         :width width
+        :scalar scalar
         :chars chars
         :sample sample
         :cutoff cutoff
         :val-max val-max
         :val-min val-min
-
-
         ))
 
 
@@ -515,8 +514,7 @@ present."
 
   (let ((res (member key args :test #'equal)))
     (if res
-        (if isbool
-            t
+        (if isbool t
             (nth 1 res))
         nil)))
 
@@ -586,6 +584,7 @@ present."
            (arg-simularity (parse-str argv "--simularity" "-S"))
            (arg-avg        (parse-str argv "--sample"  "-s"))
            (arg-file       (parse-str argv "--file"    "-f"))
+           (arg-scalar     (parse-str argv "--scalar"  "-*" "-I"))
            (arg-scale      (parse-str argv "--scale-y" "-y"))
            (arg-cols       (parse-str argv "--columns" "-c"))
            (arg-cutoff     (parse-str argv "--dither-cutoff" "--cutoff" "-C"))
@@ -655,6 +654,7 @@ present."
                     :val-min  (max 0 (min 255
                                           (or (and arg-min (parse-integer arg-min))
                                               0)))
+                    :scalar (or (and arg-scalar (parse-integer arg-scalar))  1)
 
                     :width width
                     :scale-y scale-y
