@@ -53,7 +53,6 @@
  value which all pixels of a line must share.")
 
 (defconstant default-sample-method 'normal)
-(defconstant default-middle 127)
 
 (defconstant default-scale 1.72
              "Default scale factor applied to the y-axis.
@@ -279,30 +278,40 @@ of size `WIDTH' x `HEIGHT'"
   "Clamp the value X between MIN and MAX."
   (max min (min x max)))
 
-(defun quantize (value &key (middle 127))
+(defun quantize (value &key (cutoff 127) (val-max 255) (val-min 0))
   "Quantize grayscale pixel to either 0 or 255."
-  (if (> value middle) 255 0))
+  (if (> value cutoff)
+      val-max
+    val-min))
 
 (defun floyd-steinberg-dither-pixel
-    (image x y width height &key (middle 127))  ;; Min quantized value
+    (image x y width height
+           &key
+           (scalar 1)
+           (cutoff 127)  ;; Threshold for binarization
+           (val-max 255) ;; Max quantized value
+           (val-min 0))  ;; Min quantized value
   "Apply Floyd-Steinberg dithering on IMAGE at position (X, Y) with given WIDTH and HEIGHT.
-   T
+   The pixel is quantized based on CUTOFF, and the error is diffused to its neighbors."
 
-he pixel is quantized based on CUTOFF, and the error is diffused to its
-   neighbors and IMAGE is a 2D array of values 0-255."
   (when (not (in-bounds x y width height))
     (return-from floyd-steinberg-dither-pixel
-      0))
+      0))  ;; Return existing pixel if out of bounds
 
 
-  (let* (
-         ;; Original pixel value
+  (let* (;; Original pixel value
          (old-pixel (gsref image x y))
          ;; Quantization
-         (new-pixel (quantize old-pixel :middle middle))
-           ;; Quantization error
+         (new-pixel
+          (quantize old-pixel
+                    :cutoff cutoff
+                    :val-min val-min
+                    :val-max val-max))
+         ;; Quantization error
+         (err (- old-pixel
+                 new-pixel)))
 
-         (err (- old-pixel new-pixel)))
+    ;; Set the new quantized value
     (setf (gsref image x y) new-pixel)
 
     (flet ((apply-error (dx dy factor)
@@ -311,17 +320,17 @@ he pixel is quantized based on CUTOFF, and the error is diffused to its
                ;; Distribute the error using
                ;; Floyd-Steinberg coefficients
                (when (in-bounds nx ny width height)
-                 (incf (gsref image nx ny)
-                       (abs (floor (* err factor))))))))
+                 (incf (gsref image nx  ny)
+                       (* (/ 1 scalar)
+                          err factor))))))
 
       ;; Error diffusion
-      (apply-error  1  0  7/16)  ;; Right
-      (apply-error -1  1  3/16)  ;; Bottom-left
-      (apply-error  0  1  5/16)  ;; Below
-      (apply-error  1  1  1/16)) ;; Bottom-right
+      (apply-error  1  0 7/16)  ;; Right
+      (apply-error -1  1 3/16)  ;; Bottom-left
+      (apply-error  0  1 5/16)  ;; Below
+      (apply-error  1  1 1/16)) ;; Bottom-right
 
     ;; Return new pixel
-
     new-pixel))
 
 ;;;; ###########################################################################
@@ -336,8 +345,14 @@ he pixel is quantized based on CUTOFF, and the error is diffused to its
           (scale-y default-scale)
           (intensify default-intensify)
             (simularity default-simularity)
-            (middle 127)
-          (chars ascii-chars))
+            (scalar 1)
+          (chars ascii-chars)
+          ;; For quantize
+          (cutoff 127)  ;; Under this value ==> val-min
+          (val-max 255) ;; Otherwise ==> val-min
+          (val-min 0)
+
+          )
 
   "Convert an image at path FILE to ASCII representation.
 
@@ -391,28 +406,36 @@ he pixel is quantized based on CUTOFF, and the error is diffused to its
                           src-x src-y))
 
                 (let* ((pixel
-                         (case sample
-                           ;; Average sampling method
-                           (average (pixel-average gsimage src-x src-y
-                                                   image-width image-height))
+                        (handler-case
+                            (case sample
+                                  ;; Average sampling method
+                                  (average (pixel-average gsimage src-x src-y
+                                                          image-width image-height))
 
-                           ;; Explicitly specify no sampling algorithm
-                           (normal (gsref gsimage src-x src-y))
+                                  ;; Explicitly specify no sampling algorithm
+                                  (normal (gsref gsimage src-x src-y))
 
-                           (dither (floyd-steinberg-dither-pixel
-                                    gsimage     src-x src-y
-                                    image-width image-height
-                                    :middle middle))
+                                  (dither (floyd-steinberg-dither-pixel
+                                           gsimage     src-x src-y
+                                           image-width image-height
+                                           :scalar scalar
+                                           :cutoff cutoff
+                                           :val-max val-max
+                                           :val-min val-min))
 
 
-                           ;; Line detection algorithm
-                           (lines (pixel-line gsimage src-x src-y
-                                              image-width image-height
-                                              :intensify intensify
-                                              :simularity simularity))
+                                  ;; Line detection algorithm
+                                  (lines (pixel-line gsimage src-x src-y
+                                                     image-width image-height
+                                                     :intensify intensify
+                                                     :simularity simularity))
 
-                           ;; Default sampling
-                           (_ (gsref gsimage src-x src-y))))
+                                  ;; Default sampling
+                                  (_ (gsref gsimage src-x src-y)))
+                          (error ()
+                                 (gsref gsimage src-x src-y))))
+
+
 
                        ;; Convert luminance from 0-255 to 0.0-1.0
                        (luminance (pixel-to-float
@@ -439,8 +462,14 @@ he pixel is quantized based on CUTOFF, and the error is diffused to its
             (intensify default-intensify)
             (simularity default-simularity)
             (scale-y default-scale)
-            (middle 127)
-            (chars ascii-chars))
+            (chars ascii-chars)
+            (scalar 1)
+           ;; For quantize
+           (cutoff 127)  ;; Under this value ==> val-min
+           (val-max 255) ;; Otherwise ==> val-min
+           (val-min 0)
+
+            )
   "Given a at image at filepath `FILE', compute a text image `WIDTH' chars wide.
 
  :CHARS - is a list of characters which correspond to a value of luminance
@@ -460,9 +489,14 @@ he pixel is quantized based on CUTOFF, and the error is diffused to its
         :simularity simularity
         :scale-y scale-y
         :width width
-        :middle middle
         :chars chars
-        :sample sample))
+        :sample sample
+        :cutoff cutoff
+        :val-max val-max
+        :val-min val-min
+
+
+        ))
 
 
 ;;;; ###########################################################################
@@ -551,11 +585,12 @@ present."
            (arg-intensify  (parse-str argv "--intensify"  "-i"))
            (arg-simularity (parse-str argv "--simularity" "-S"))
            (arg-avg        (parse-str argv "--sample"  "-s"))
-           (arg-middle     (parse-str argv "--middle"  "-m"))
            (arg-file       (parse-str argv "--file"    "-f"))
            (arg-scale      (parse-str argv "--scale-y" "-y"))
-           (arg-output     (parse-str argv "--output" "-o"))
            (arg-cols       (parse-str argv "--columns" "-c"))
+           (arg-cutoff     (parse-str argv "--dither-cutoff" "--cutoff" "-C"))
+           (arg-max        (parse-str argv "--dither-max" "--max" "-T"))
+           (arg-min        (parse-str argv "--dither-min" "--min" "-B"))
            (arg-help       (parse-bool argv "--help" "-h" "--usage")))
 
 
@@ -594,12 +629,8 @@ present."
                         default-scale))
 
            ;; Save image to a file?
-           (save-image-path arg-output)
-
-           (middle (prog1 (or (and arg-middle (parse-integer arg-middle))
-                              default-middle)
-                     (format t "~a~%" (or (and arg-middle (parse-integer arg-middle))
-                              default-middle))))
+           (save-image-path (or (parse-arg "-o" argv :isbool nil)
+                                (parse-arg "--output" argv :isbool nil)))
 
            ;; Compute the text image
            (text-image
@@ -613,10 +644,22 @@ present."
                                    default-intensify)
                     :simularity  (or (and arg-simularity (parse-integer arg-simularity))
                                      default-simularity)
+                    :cutoff (max 0 (min 255
+                                      (or (and arg-cutoff (parse-integer arg-cutoff))
+                                          127)))
+
+                    :val-max (max 0 (min 255
+                                         (or (and arg-max (parse-integer arg-max))
+                                             255)))
+
+                    :val-min  (max 0 (min 255
+                                          (or (and arg-min (parse-integer arg-min))
+                                              0)))
+
                     :width width
                     :scale-y scale-y
-                    :middle   middle
                     :chars arg-alpha
+                    :scalar 1
                     :sample
                     (or (and (equal "average" arg-avg) 'average)
                         (and (equal "normal" arg-avg) 'normal)
@@ -641,6 +684,7 @@ present."
           (format t "~a" text-image))
 
       (uiop:quit 0)))))
+
 
 (defun build-exec (&key (filepath binary-file))
   "Build an executable for the script."
