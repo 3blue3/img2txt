@@ -272,6 +272,70 @@ of size `WIDTH' x `HEIGHT'"
       (/ sum len)))
 
 
+;;; Dither
+
+(defun clamp (x min max)
+  "Clamp the value X between MIN and MAX."
+  (max min (min x max)))
+
+(defun quantize (value &key (cutoff 127) (val-max 255) (val-min 0))
+  "Quantize grayscale pixel to either 0 or 255."
+  (if (> value cutoff)
+      val-max
+    val-min))
+
+(defun floyd-steinberg-dither-pixel
+    (image x y width height
+           &key
+           ;; For quantize
+           (cutoff 127)  ;; Under this value ==> val-min
+           (val-max 255) ;; Otherwise ==> val-min
+           (val-min 0))
+  "Apply Floyd-Steinberg dithering on IMAGE with given WIDTH and HEIGHT."
+
+
+  (if (not (and (in-bounds x y width height)))
+      (progn
+;;        (format t " Out of bounds: (~a, ~a) ~%" x y)
+        (aref image y x 0))
+
+    (let* ((old-pixel (aref image  y x 0))
+           (new-pixel (quantize old-pixel
+                                :cutoff cutoff
+                                :val-max val-max
+                                :val-min val-min))
+           (err (floor (- old-pixel new-pixel))))
+
+;;      (format t "In bounds: (~a, ~a) ~%" x y)
+
+      (setf (aref image y x 0) new-pixel)
+
+      ;; -- Error diffusion --
+
+      ;; Right neighbor
+      (when (in-bounds (1+ x) y width height)
+        (incf (aref image (1+ x) y 0)
+              (floor (* err 7/16))))
+
+      ;; Bottom-right
+      (when (in-bounds (1+ x) (1+ y) width height)
+        (incf (aref image  (1+ y) (1+ x) 0)
+              (floor (* err 1/16))))
+
+      ;; Below
+      (when (in-bounds x (1+ y) width height)
+        (incf (aref image (1+ y) x 0)
+              (floor (* err 5/16))))
+
+      ;; Bottom-left
+      (when (in-bounds (1- x) (1+ y) width height)
+        (incf (aref image  (1+ y) (1- x) 0)
+              (floor (* err 3/16))))
+
+;;      (format t "end~%")
+      new-pixel)))
+
+
 ;;;; ###########################################################################
 ;;;; #                              IMAGE TO TEXT                              #
 ;;;; ###########################################################################
@@ -284,7 +348,13 @@ of size `WIDTH' x `HEIGHT'"
           (scale-y default-scale)
           (intensify default-intensify)
           (simularity default-simularity)
-          (chars ascii-chars))
+          (chars ascii-chars)
+           ;; For quantize
+           (cutoff 127)  ;; Under this value ==> val-min
+           (val-max 255) ;; Otherwise ==> val-min
+           (val-min 0)
+
+          )
 
   "Convert an image at path FILE to ASCII representation.
 
@@ -338,22 +408,35 @@ of size `WIDTH' x `HEIGHT'"
                           src-x src-y))
 
                 (let* ((pixel
-                         (case sample
-                           ;; Average sampling method
-                           (average (pixel-average gsimage src-x src-y
-                                                   image-width image-height))
+                        (handler-case
+                            (case sample
+                                  ;; Average sampling method
+                                  (average (pixel-average gsimage src-x src-y
+                                                          image-width image-height))
 
-                           ;; Explicitly specify no sampling algorithm
-                           (normal (gsref gsimage src-x src-y))
+                                  ;; Explicitly specify no sampling algorithm
+                                  (normal (gsref gsimage src-x src-y))
 
-                           ;; Line detection algorithm
-                           (lines (pixel-line gsimage src-x src-y
-                                              image-width image-height
-                                              :intensify intensify
-                                              :simularity simularity))
+                                  (dither (floyd-steinberg-dither-pixel
+                                           gsimage     src-x src-y
+                                           image-width image-height
+                                           :cutoff cutoff
+                                           :val-max val-max
+                                           :val-min val-min))
 
-                           ;; Default sampling
-                           (_ (gsref gsimage src-x src-y))))
+
+                                  ;; Line detection algorithm
+                                  (lines (pixel-line gsimage src-x src-y
+                                                     image-width image-height
+                                                     :intensify intensify
+                                                     :simularity simularity))
+
+                                  ;; Default sampling
+                                  (_ (gsref gsimage src-x src-y)))
+                          (error ()
+                                 (gsref gsimage src-x src-y))))
+
+
 
                        ;; Convert luminance from 0-255 to 0.0-1.0
                        (luminance (pixel-to-float
@@ -380,7 +463,13 @@ of size `WIDTH' x `HEIGHT'"
             (intensify default-intensify)
             (simularity default-simularity)
             (scale-y default-scale)
-            (chars ascii-chars))
+            (chars ascii-chars)
+           ;; For quantize
+           (cutoff 127)  ;; Under this value ==> val-min
+           (val-max 255) ;; Otherwise ==> val-min
+           (val-min 0)
+
+            )
   "Given a at image at filepath `FILE', compute a text image `WIDTH' chars wide.
 
  :CHARS - is a list of characters which correspond to a value of luminance
@@ -401,7 +490,13 @@ of size `WIDTH' x `HEIGHT'"
         :scale-y scale-y
         :width width
         :chars chars
-        :sample sample))
+        :sample sample
+        :cutoff cutoff
+        :val-max val-max
+        :val-min val-min
+
+
+        ))
 
 
 ;;;; ###########################################################################
@@ -493,6 +588,9 @@ present."
            (arg-file       (parse-str argv "--file"    "-f"))
            (arg-scale      (parse-str argv "--scale-y" "-y"))
            (arg-cols       (parse-str argv "--columns" "-c"))
+           (arg-cutoff     (parse-str argv "--dither-cutoff" "--cutoff" "-C"))
+           (arg-max        (parse-str argv "--dither-max" "--max" "-T"))
+           (arg-min        (parse-str argv "--dither-min" "--min" "-B"))
            (arg-help       (parse-bool argv "--help" "-h" "--usage")))
 
 
@@ -546,6 +644,18 @@ present."
                                    default-intensify)
                     :simularity  (or (and arg-simularity (parse-integer arg-simularity))
                                      default-simularity)
+                    :cutoff (max 0 (min 255
+                                      (or (and arg-cutoff (parse-integer arg-cutoff))
+                                          127)))
+
+                    :val-max (max 0 (min 255
+                                         (or (and arg-max (parse-integer arg-max))
+                                             255)))
+
+                    :val-min  (max 0 (min 255
+                                          (or (and arg-min (parse-integer arg-min))
+                                              0)))
+
                     :width width
                     :scale-y scale-y
                     :chars arg-alpha
@@ -553,6 +663,7 @@ present."
                     (or (and (equal "average" arg-avg) 'average)
                         (and (equal "normal" arg-avg) 'normal)
                         (and (equal "lines" arg-avg) 'lines)
+                        (and (equal "dither" arg-avg) 'dither)
                         default-sample-method))
                    )
 
