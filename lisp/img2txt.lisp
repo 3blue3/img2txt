@@ -308,8 +308,7 @@ of size `WIDTH' x `HEIGHT'"
                     :val-min val-min
                     :val-max val-max))
          ;; Quantization error
-         (err (- old-pixel
-                 new-pixel)))
+         (err (round (- old-pixel new-pixel))))
 
     ;; Set the new quantized value
     (setf (gsref image x y) new-pixel)
@@ -320,9 +319,7 @@ of size `WIDTH' x `HEIGHT'"
                ;; Distribute the error using
                ;; Floyd-Steinberg coefficients
                (when (in-bounds nx ny width height)
-                 (incf (gsref image nx  ny)
-                       (* (/ 1 scalar)
-                          err factor))))))
+                 (incf (gsref image nx  ny) (round (* err factor)))))))
 
       ;; Error diffusion
       (apply-error  1  0 7/16)  ;; Right
@@ -331,7 +328,7 @@ of size `WIDTH' x `HEIGHT'"
       (apply-error  1  1 1/16)) ;; Bottom-right
 
     ;; Return new pixel
-    new-pixel))
+    (* scalar new-pixel)))
 
 ;;;; ###########################################################################
 ;;;; #                              IMAGE TO TEXT                              #
@@ -340,19 +337,20 @@ of size `WIDTH' x `HEIGHT'"
 
 (defun image-to-ascii
     (file &key
-          (width default-column-width)
-          (sample default-sample-method)
-          (scale-y default-scale)
-          (intensify default-intensify)
+            (width default-column-width)
+            (sample default-sample-method)
+
+            (scale-y default-scale)
+            (intensify default-intensify)
             (simularity default-simularity)
             (scalar 1)
-          (chars ascii-chars)
-          ;; For quantize
-          (cutoff 127)  ;; Under this value ==> val-min
-          (val-max 255) ;; Otherwise ==> val-min
-          (val-min 0)
+            (chars ascii-chars)
+            ;; For quantize
+            (cutoff 127)  ;; Under this value ==> val-min
+            (val-max 255) ;; Otherwise ==> val-min
+            (val-min 0)
 
-          )
+            )
 
   "Convert an image at path FILE to ASCII representation.
 
@@ -464,10 +462,10 @@ of size `WIDTH' x `HEIGHT'"
             (scale-y default-scale)
             (chars ascii-chars)
             (scalar 1)
-           ;; For quantize
-           (cutoff 127)  ;; Under this value ==> val-min
-           (val-max 255) ;; Otherwise ==> val-min
-           (val-min 0)
+            ;; For quantize
+            (cutoff 127)  ;; Under this value ==> val-min
+            (val-max 255) ;; Otherwise ==> val-min
+            (val-min 0)
 
             )
   "Given a at image at filepath `FILE', compute a text image `WIDTH' chars wide.
@@ -492,7 +490,9 @@ of size `WIDTH' x `HEIGHT'"
         :chars chars
         :sample sample
         :cutoff cutoff
+        :scalar scalar
         :val-max val-max
+        :scalar 1.0
         :val-min val-min
 
 
@@ -589,6 +589,8 @@ present."
            (arg-scale      (parse-str argv "--scale-y" "-y"))
            (arg-cols       (parse-str argv "--columns" "-c"))
            (arg-cutoff     (parse-str argv "--dither-cutoff" "--cutoff" "-C"))
+           (arg-output     (parse-str argv "--output" "-o"))
+           (arg-scalar     (parse-str argv "--scalar" "-g"))
            (arg-max        (parse-str argv "--dither-max" "--max" "-T"))
            (arg-min        (parse-str argv "--dither-min" "--min" "-B"))
            (arg-help       (parse-bool argv "--help" "-h" "--usage")))
@@ -629,8 +631,7 @@ present."
                         default-scale))
 
            ;; Save image to a file?
-           (save-image-path (or (parse-arg "-o" argv :isbool nil)
-                                (parse-arg "--output" argv :isbool nil)))
+           (save-image-path arg-output)
 
            ;; Compute the text image
            (text-image
@@ -655,11 +656,10 @@ present."
                     :val-min  (max 0 (min 255
                                           (or (and arg-min (parse-integer arg-min))
                                               0)))
-
+                    :scalar  (/ (or (and arg-scalar (parse-integer arg-scalar)) 100) 100)
                     :width width
                     :scale-y scale-y
                     :chars arg-alpha
-                    :scalar 1
                     :sample
                     (or (and (equal "average" arg-avg) 'average)
                         (and (equal "normal" arg-avg) 'normal)
