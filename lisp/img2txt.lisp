@@ -57,8 +57,11 @@
 (defconstant default-scale (/ 100 57)
   "Default scale factor applied to the y-axis.")
 
-(defconstant ascii-chars " .,·-~¬;:«÷»=+*oσaøæO0}]\\?@%£ß€§§§###"
-  "List of ascii chars corresponding to a value of image luminance
+(defconstant ascii-chars " ¨´`·.,¸-~;:«÷»=+*><szŋoaxøæO0}]\\?IWþłE£ðđKXßBNM€§@%#"
+  "List of ascii chars corresponding to a value of image luminanc
+
+
+e
 in [0.0, 1.0] going from lightest to darkest.")
 
 (defconstant binary-file "./img2txt"
