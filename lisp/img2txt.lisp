@@ -56,9 +56,13 @@
 (defparameter *default-scale* (/ 100 57)
   "Default scale factor applied to the y-axis.")
 
-(defparameter *ascii-chars* " .,-~¬;:÷=»+*}]?£#€§%@"
+(defparameter *ascii-chars* " .,·-~¬;:«÷»=+*oσaøæO0}]\\?@%£ß€§§§###"
   "List of ascii chars corresponding to a value of image luminance
 in [0.0, 1.0] going from lightest to darkest.")
+
+(defparameter *binary-file* "./img2txt"
+              "Compilation target file path")
+
 
 (defparameter *default-column-width* 80
   "The default column width.")
@@ -85,29 +89,33 @@ in [0.0, 1.0] going from lightest to darkest.")
         (< ,y ,height) (>= ,y 0)))
 
 
-
-;;;;; ########## SAMPLING METHOD: LINES ##########
-
+;;;; ###########################################################################
+;;;; #                         SAMPLING METHOD: LINES                          #
+;;;; ###########################################################################
 
 
 (defparameter *relative-lines*
-  '(((-1 . 1)  (0 . 1)  (1 . 1)) ;; Top
-    ((-1 . 0)  (0 . 0)  (1 . 0)) ;; Middle
-    ((-1 . -1) (0 . -1) (1 . -1));; Bottom
+  '(;; Horizontal lines
+    ((-1 . 1)  (0 . 1)  (1 . 1)) ;; Top    ---
+    ((-1 . 0)  (0 . 0)  (1 . 0)) ;; Middle ---
+    ((-1 . -1) (0 . -1) (1 . -1));; Bottom ---
     ;; Diagonal lines
+
     ((1 . -1)  (0 . 0) (-1 . 1)) ;; [\]
     ((-1 . 1)  (0 . 0) (1 . -1)) ;; [/]
+
     ;; Vertical lines
-    ((1 . -1)  (1 . 0)  (1 . 1))    ;; Left
-    ((0 . -1)  (0 . 0)  (0 . 1))    ;; Middle
-    ((-1 . -1) (-1 . 0) (-1 . 1)))) ;; Right
+    ((1 . -1)  (1 . 0)  (1 . 1))    ;; Left   | | |
+    ((0 . -1)  (0 . 0)  (0 . 1))    ;; Middle | | |
+    ((-1 . -1) (-1 . 0) (-1 . 1)))) ;; Right  | | |
+
 
 (defparameter *3x3-points*
   '((1 . 1)  (1 . -1) (-1 . 1)
     (0 . 1)  (0 . -1)  (1 . 0)
     (-1 . 0) (0 . 0)))
 
-;; Checks if two points form a diagonal line
+
 (defmacro check-diagonal (a b)
   "Return T if points A and B form a diagonal line."
   `(or (and (equal ,a '(1 . 1)) (equal ,b '(-1 . -1)))
@@ -115,39 +123,44 @@ in [0.0, 1.0] going from lightest to darkest.")
        (and (equal ,a '(1 . -1)) (equal ,b '(-1 . 1)))
        (and (equal ,b '(1 . -1)) (equal ,a '(-1 . 1)))))
 
-;; Checks if three points form a horizontal line
 (defmacro check-horizontal (a b c)
   "Return T if A, B, and C form a horizontal line."
   `(and (equal (car ,a) (car ,b))
         (equal (car ,b) (car ,c))))
 
-;; Checks if three points form a vertical line
+
 (defmacro check-vertical (a b c)
   "Return T if A, B, and C form a vertical line."
   `(and (equal (cdr ,a) (cdr ,b))
         (equal (cdr ,b) (cdr ,c))))
 
+
 (defun check-line (a b c)
   "Check if A, B, C form a horizontal, vertical, or diagonal line."
+
   (let ((not-origo '())
         (has-origo nil))
-    (or
-     (check-vertical a b c)
-     (check-horizontal a b c)
+
+    (or (check-vertical a b c)
+        (check-horizontal a b c)
      (progn
+
+       ;; Sort out origo
        (dolist (p `(,a ,b ,c))
          (if (not (equal p '(0 . 0)))
              (push p not-origo)
-             (setq has-origo t)))
+           (setq has-origo t)))
+
+       ;; Only if a line has origo, check diagonal
        (if (and has-origo (= (length not-origo) 2))
            (check-diagonal (nth 0 not-origo) (nth 1 not-origo))
            nil)))))
 
-;; Computes absolute difference in pixel intensity
 (defun color-distance (c1 c2)
+  "Computes absolute difference in pixel intensity between C1 and C2."
   (abs (- c1 c2)))
 
-;; Checks if the three points in a line have similar colors
+
 (defun similar-color (line &key (similarity *default-simularity*))
   "Return T if all pixels in LINE have similar color."
 
@@ -159,12 +172,15 @@ in [0.0, 1.0] going from lightest to darkest.")
          (< 0 (color-distance (nth 1 a) (nth 1 c)) similarity)
          (< 0 (color-distance (nth 1 b) (nth 1 c)) similarity))))
 
+
 ;; Wrapper for `similar-color`
 (defun similar-colorp (line &key (similarity *default-simularity*))
   "Checks if three pixel values A, B, and C are similar."
   (similar-color line :similarity similarity))
 
+
 (defun pixel-line
+
     (image x y width height
      &key
        (intensify *default-intensify*)
@@ -204,10 +220,12 @@ in [0.0, 1.0] going from lightest to darkest.")
                   (progn (setq is-valid? nil)
                          (throw 'no-line t))))))
 
-        ;; If a valid line is found and colors match, return the average intensity
-        (when (and is-valid?
-                   ;; Check if
-                   (similar-colorp line-w-color :similarity simularity))
+        ;; If a valid line is found and colors match, return the average
+        ;; intensity
+        (when
+            (and is-valid?
+                 (similar-colorp line-w-color
+                                 :similarity simularity))
 
           (push line-w-color valid-lines))))
 
@@ -225,8 +243,9 @@ in [0.0, 1.0] going from lightest to darkest.")
 
 
 
-
-;;;;; ########## SAMPLING METHOD: AVERAGE ##########
+;;;; ###########################################################################
+;;;; #                       SAMPLING METHOD: AVERAGE                          #
+;;;; ###########################################################################
 
 
 (defun pixel-average (image x y width height)
@@ -246,20 +265,22 @@ of size `WIDTH' x `HEIGHT'"
             (incf len 1))))
 
       ;; Compute average.
-      (/ sum len)
-      ))
+      (/ sum len)))
 
 
+;;;; ###########################################################################
+;;;; #                              IMAGE TO TEXT                              #
+;;;; ###########################################################################
 
 
 (defun image-to-ascii
     (file &key
-            (width *default-column-width*)
-            (sample *default-sample-method*)
-            (scale-y *default-scale*)
-            (intensify *default-intensify*)
-            (simularity *default-simularity*)
-            (chars *ascii-chars*))
+          (width *default-column-width*)
+          (sample *default-sample-method*)
+          (scale-y *default-scale*)
+          (intensify *default-intensify*)
+          (simularity *default-simularity*)
+          (chars *ascii-chars*))
 
   "Convert an image at path FILE to ASCII representation.
 
@@ -279,24 +300,26 @@ of size `WIDTH' x `HEIGHT'"
          (image-height (png:image-height gsimage))
          (bit-depth    (png:image-bit-depth gsimage)))
 
-    (let* ((scale        (/ image-width width))
-           (height       (floor (/ image-height scale) scale-y)))
+    (let* ((scale  (/ image-width width))
+           (height (floor (/ image-height scale) scale-y)))
 
     (let ((output-string
             (make-array
              0 :element-type 'character
                :adjustable t
                :fill-pointer 0)))
-      (declare (type string output-string))
 
+      (declare (type string output-string))
 
       (dotimes (y height)
         (let* ((row (make-string width))
                (src-y (min (floor (* y scale scale-y))
                            (1- image-height))))
 
+          ;; Y is out of bounds
           (when  (>= src-y image-height)
-            (format *error-output* "Y-Axis: ~a>=~aOut of bounds~%" src-y image-height))
+            (format *error-output* "Y-Axis: ~a>=~aOut of bounds~%"
+                    src-y image-height))
 
           (dotimes (x width)
             ;; Compute position for the sampling of characters
@@ -307,7 +330,8 @@ of size `WIDTH' x `HEIGHT'"
 
                 ;; This should never happen
                 (when (not (in-bounds src-x src-y image-width image-height))
-                  (format *error-output* "X-Axis: Position (~a, ~a) is out of bounds~%" src-x src-y))
+                  (format *error-output* "X-Axis: Position (~a, ~a) is out of bounds~%"
+                          src-x src-y))
 
                 (let* ((pixel
                          (case sample
@@ -373,8 +397,9 @@ of size `WIDTH' x `HEIGHT'"
         :sample sample))
 
 
-
-;;;; ##### Argument handling, Startup and Compilation ####
+;;;; ###########################################################################
+;;;; #               ARGUMENT HANDLING, STARTUP AND COMPILATION                #
+;;;; ###########################################################################
 
 
 (defun parse-arg (key args &key (isbool nil))
@@ -431,35 +456,34 @@ present."
                     "                 Show this message~%"))))
 
 
+;;;; ###########################################################################
+;;;; #                      STARTUP / MAIN FUNCTION                            #
+;;;; ###########################################################################
+
+(defmacro parse-bool (args &rest names)
+  "Parse a bool argument."
+  `(or ,@(mapcar (lambda (name)
+                   `(parse-arg ,name ,args :isbool t))
+                 names)))
+
+(defmacro parse-str (args &rest names)
+  "Parse a bool argument."
+  `(or ,@(mapcar (lambda (name)
+                   `(parse-arg ,name ,args :isbool nil))
+                 names)))
+
 (defun main ()
   "Main function to process command-line arguments and generate ASCII art."
 
   (let* ((argv (uiop:raw-command-line-arguments))
          (argc (length argv))
-
-         (arg-alpha (or (parse-arg "--alphabet" argv :isbool nil)
-                        (parse-arg "-a" argv :isbool nil)))
-
-
-         (arg-intensify
-           (or (parse-arg "--intensify" argv :isbool nil)
-               (parse-arg "-i" argv :isbool nil)))
-
-         (arg-simularity
-           (or (parse-arg "--simularity" argv :isbool nil)
-               (parse-arg "-S" argv :isbool nil)))
-
-         (arg-avg (or (parse-arg "--sample" argv :isbool nil)
-                      (parse-arg "-s" argv :isbool nil)))
-
-         (arg-file (or (parse-arg "--file" argv :isbool nil)
-                       (parse-arg "-f" argv :isbool nil)))
-
-         (arg-scale (or (parse-arg "--scale-y" argv :isbool nil)
-                        (parse-arg "-y" argv :isbool nil)))
-
-         (arg-cols (or (parse-arg "--columns" argv :isbool nil)
-                       (parse-arg "-c" argv :isbool nil))))
+         (arg-alpha      (parse-str argv "--alphabet"   "-a"))
+         (arg-intensify  (parse-str argv "--intensify"  "-i"))
+         (arg-simularity (parse-str argv "--simularity" "-S"))
+         (arg-avg        (parse-str argv "--sample"  "-s"))
+         (arg-file       (parse-str argv "--file"    "-f"))
+         (arg-scale      (parse-str argv "--scale-y" "-y"))
+         (arg-cols       (parse-str argv "--columns" "-c")))
 
     ;; A path cannot have been provided. Show help message
     (when (< argc 2)
@@ -468,10 +492,7 @@ present."
       (uiop:quit 1))
 
     ;; The user has specified that the help message is shown
-    (when (or (parse-arg "--help" argv :isbool t)
-              (parse-arg "-h" argv :isbool t)
-              (parse-arg "--usage" argv :isbool t))
-
+    (when (parse-bool argv "--help" "-h" "--usage")
       (show-help (car argv))
       (uiop:quit 0))
 
@@ -506,25 +527,25 @@ present."
                  (progn
 
 
-                   (img-to-txt image-path
-                               :intensify (or (and arg-intensify
-                                                   (/ (parse-integer arg-intensify) 100))
-                                              *default-intensify*)
-
-                               :simularity  (or (and arg-simularity
-                                                     (parse-integer arg-simularity))
-                                                *default-simularity*)
-                             :width width
-                             :scale-y scale-y
-                             :chars arg-alpha
-                             :sample (or (and (equal "average" arg-avg) 'average)
-                                         (and (equal "normal" arg-avg) 'normal)
-                                         (and (equal "lines" arg-avg) 'lines)
-                                         *default-sample-method*))
-                 )
+                   (img-to-txt
+                    image-path
+                    :intensify (or (and arg-intensify (/ (parse-integer arg-intensify) 100))
+                                   *default-intensify*)
+                    :simularity  (or (and arg-simularity (parse-integer arg-simularity))
+                                     *default-simularity*)
+                    :width width
+                    :scale-y scale-y
+                    :chars arg-alpha
+                    :sample
+                    (or (and (equal "average" arg-avg) 'average)
+                        (and (equal "normal" arg-avg) 'normal)
+                        (and (equal "lines" arg-avg) 'lines)
+                        *default-sample-method*))
+                   )
 
                  (progn (format *error-output* "File does not exist, exiting...~%")
                         (uiop:quit 1)))))
+
 
       ;; Print the text image
       (if save-image-path
@@ -540,7 +561,7 @@ present."
       (uiop:quit 0))))
 
 
-(defun build-exec (&key (filepath "./img2txt"))
+(defun build-exec (&key (filepath *binary-file*))
   "Build an executable for the script."
   (sb-ext:save-lisp-and-die filepath
      :toplevel 'main
