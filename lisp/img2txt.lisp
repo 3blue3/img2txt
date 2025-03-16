@@ -54,8 +54,9 @@
 
 (defconstant default-sample-method 'normal)
 
-(defconstant default-scale (/ 100 57)
-  "Default scale factor applied to the y-axis.")
+(defconstant default-scale 1.72
+             "Default scale factor applied to the y-axis.
+Computed using font-height / font-width.")
 
 (defconstant ascii-chars " ¨´`·.,¸-~;:«÷»=+*><szŋoaxøæO0}]\\?IWþłE£ðđKXßBNM€§@%#"
   "List of ascii chars corresponding to a value of image luminanc
